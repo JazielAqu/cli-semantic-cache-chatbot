@@ -19,8 +19,3 @@ def call_gemini(messages: list) -> tuple[str, int]:
     text = (response.text or "").strip()
     token_estimate = len(text.split())
     return text, token_estimate
-
-if __name__ == "__main__":
-    response, tokens = call_gemini(["Say a short sentence."])
-    print(response)
-    print(f"Estimated tokens: {tokens}")
