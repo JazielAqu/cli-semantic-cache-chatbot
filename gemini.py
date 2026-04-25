@@ -1,3 +1,4 @@
+import math
 import os
 from dotenv import load_dotenv
 from google import genai
@@ -17,5 +18,5 @@ def call_gemini(messages: list) -> tuple[str, int]:
         contents=messages,
     )
     text = (response.text or "").strip()
-    token_estimate = len(text.split())
+    token_estimate = math.ceil(len(text) / 4)  # rough estimate: 1 token ~ 4 chars
     return text, token_estimate
