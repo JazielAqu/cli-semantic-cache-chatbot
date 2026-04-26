@@ -19,18 +19,17 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 class SemanticCache:
     def __init__(self, threshold: float = 0.66):
         self.threshold = threshold
-        self.entries = []  # list of {embedding, query, response, token_estimate}
+        self.entries = []  # list of {embedding, query, response, output_token_estimate}
         self.hits = 0
         self.misses = 0
-        self.tokens_saved = 0
 
     def get(self, query: str):
         if not self.entries:
             self.misses += 1
-            return None, 0.0
+            return None, 0.0, 0
 
         query_embedding = embed(query)
-        best_score = 0.0
+        best_score = float("-inf")
         best_entry = None
 
         for entry in self.entries:
@@ -41,19 +40,18 @@ class SemanticCache:
 
         if best_entry and best_score >= self.threshold:
             self.hits += 1
-            self.tokens_saved += best_entry["token_estimate"]
-            return best_entry["response"], best_score
+            return best_entry["response"], best_score, best_entry["output_token_estimate"]
 
         self.misses += 1
-        return None, best_score
+        return None, best_score, 0
 
-    def store(self, query: str, response: str, token_estimate: int):
+    def store(self, query: str, response: str, output_token_estimate: int):
         self.entries.append(
             {
                 "embedding": embed(query),
                 "query": query,
                 "response": response,
-                "token_estimate": token_estimate,
+                "output_token_estimate": output_token_estimate,
             }
         )
 
@@ -70,5 +68,4 @@ class SemanticCache:
             "cache_hits": self.hits,
             "cache_misses": self.misses,
             "hit_rate": f"{hit_rate:.1f}%",
-            "tokens_saved": self.tokens_saved,
         }

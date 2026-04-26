@@ -21,7 +21,20 @@ class GeminiRequestError(RuntimeError):
     pass
 
 
-def call_gemini(messages: list) -> tuple[str, int]:
+def estimate_tokens_from_text(text: str) -> int:
+    if not text:
+        return 0
+    return math.ceil(len(text) / 4)  # rough estimate: 1 token ~ 4 chars
+
+
+def estimate_input_tokens(messages: list[str]) -> int:
+    prompt_text = "\n".join(messages)
+    return estimate_tokens_from_text(prompt_text)
+
+
+def call_gemini(messages: list[str]) -> tuple[str, int, int]:
+    input_token_estimate = estimate_input_tokens(messages)
+
     try:
         response = client.models.generate_content(
             model=model_name,
@@ -36,5 +49,5 @@ def call_gemini(messages: list) -> tuple[str, int]:
         raise GeminiRequestError(f"Gemini request failed: {error_text}") from exc
 
     text = (response.text or "").strip()
-    token_estimate = math.ceil(len(text) / 4)  # rough estimate: 1 token ~ 4 chars
-    return text, token_estimate
+    output_token_estimate = estimate_tokens_from_text(text)
+    return text, input_token_estimate, output_token_estimate

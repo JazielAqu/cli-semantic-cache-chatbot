@@ -1,9 +1,20 @@
 from cache import SemanticCache
-from gemini import GeminiRateLimitError, GeminiRequestError, call_gemini
+from gemini import (
+    GeminiRateLimitError,
+    GeminiRequestError,
+    call_gemini,
+    estimate_input_tokens,
+)
 
 
 cache = SemanticCache(threshold=0.66)
 conversation_history: list[dict[str, str]] = []
+token_metrics = {
+    "estimated_input_tokens_sent": 0,
+    "estimated_output_tokens_generated": 0,
+    "estimated_input_tokens_saved": 0,
+    "estimated_output_tokens_saved": 0,
+}
 
 
 def format_history_for_gemini() -> list[str]:
@@ -16,36 +27,66 @@ def format_history_for_gemini() -> list[str]:
 
 
 def chat(user_input: str) -> tuple[str, bool, float]:
-    cached_response, score = cache.get(user_input)
+    cached_response, score, cached_output_tokens = cache.get(user_input)
 
     if cached_response is not None:
         conversation_history.append({"role": "user", "content": user_input})
+        would_have_sent_messages = format_history_for_gemini()
+        token_metrics["estimated_input_tokens_saved"] += estimate_input_tokens(
+            would_have_sent_messages
+        )
+        token_metrics["estimated_output_tokens_saved"] += cached_output_tokens
         conversation_history.append({"role": "assistant", "content": cached_response})
         return cached_response, True, score
 
     conversation_history.append({"role": "user", "content": user_input})
     messages = format_history_for_gemini()
     try:
-        response, token_estimate = call_gemini(messages)
+        response, input_tokens_estimate, output_tokens_estimate = call_gemini(messages)
     except (GeminiRateLimitError, GeminiRequestError):
         # Remove unresolved user turn when generation fails.
         conversation_history.pop()
         raise
 
+    token_metrics["estimated_input_tokens_sent"] += input_tokens_estimate
+    token_metrics["estimated_output_tokens_generated"] += output_tokens_estimate
     conversation_history.append({"role": "assistant", "content": response})
-    cache.store(user_input, response, token_estimate)
+    cache.store(user_input, response, output_tokens_estimate)
     return response, False, score
 
 
 
 def print_stats() -> None:
     stats = cache.stats()
+    total_estimated_saved = (
+        token_metrics["estimated_input_tokens_saved"]
+        + token_metrics["estimated_output_tokens_saved"]
+    )
+    total_estimated_sent_and_generated = (
+        token_metrics["estimated_input_tokens_sent"]
+        + token_metrics["estimated_output_tokens_generated"]
+    )
+
     print("\n--- Session Stats ---")
     print(f"Total lookups: {stats['total_queries']}")
     print(f"Cache hits: {stats['cache_hits']}")
     print(f"Cache misses: {stats['cache_misses']}")
     print(f"Cache hit rate: {stats['hit_rate']}")
-    print(f"Estimated tokens saved: {stats['tokens_saved']}")
+    print(f"Estimated input tokens sent: {token_metrics['estimated_input_tokens_sent']}")
+    print(
+        f"Estimated output tokens generated: "
+        f"{token_metrics['estimated_output_tokens_generated']}"
+    )
+    print(
+        f"Estimated input tokens saved via cache: "
+        f"{token_metrics['estimated_input_tokens_saved']}"
+    )
+    print(
+        f"Estimated output tokens saved via cache: "
+        f"{token_metrics['estimated_output_tokens_saved']}"
+    )
+    print(f"Estimated total tokens saved: {total_estimated_saved}")
+    print(f"Estimated total tokens sent/generated: {total_estimated_sent_and_generated}")
     print("---------------------\n")
 
 
