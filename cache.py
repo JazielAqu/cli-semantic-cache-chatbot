@@ -17,7 +17,7 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 class SemanticCache:
-    def __init__(self, threshold: float = 0.85):
+    def __init__(self, threshold: float = 0.66):
         self.threshold = threshold
         self.entries = []  # list of {embedding, query, response, token_estimate}
         self.hits = 0

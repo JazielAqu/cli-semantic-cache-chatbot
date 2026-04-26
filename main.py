@@ -1,10 +1,8 @@
-from urllib import response
-
 from cache import SemanticCache
-from gemini import call_gemini
+from gemini import GeminiRateLimitError, GeminiRequestError, call_gemini
 
 
-cache = SemanticCache(threshold=0.85)
+cache = SemanticCache(threshold=0.66)
 conversation_history: list[dict[str, str]] = []
 
 
@@ -27,7 +25,13 @@ def chat(user_input: str) -> tuple[str, bool, float]:
 
     conversation_history.append({"role": "user", "content": user_input})
     messages = format_history_for_gemini()
-    response, token_estimate = call_gemini(messages)
+    try:
+        response, token_estimate = call_gemini(messages)
+    except (GeminiRateLimitError, GeminiRequestError):
+        # Remove unresolved user turn when generation fails.
+        conversation_history.pop()
+        raise
+
     conversation_history.append({"role": "assistant", "content": response})
     cache.store(user_input, response, token_estimate)
     return response, False, score
@@ -66,7 +70,14 @@ def main() -> None:
             print_stats()
             continue
 
-        response, from_cache, score = chat(user_input)
+        try:
+            response, from_cache, score = chat(user_input)
+        except GeminiRateLimitError as exc:
+            print(f"Bot [error]: {exc}\n")
+            continue
+        except GeminiRequestError as exc:
+            print(f"Bot [error]: {exc}\n")
+            continue
     
         if from_cache:
             print(f"Bot [cache score={score:.3f}]: {response}\n")
