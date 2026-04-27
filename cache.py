@@ -32,6 +32,7 @@ STOPWORDS = {
 MIN_TEMPLATE_TOKEN_COUNT = 6
 MAX_SMALL_EDIT_TOKEN_CHANGES = 4
 MIN_TEMPLATE_OVERLAP_RATIO = 0.60
+MIN_GUARDRAIL_QUERY_TOKENS = 3
 
 
 def normalize(text: str) -> str:
@@ -132,6 +133,13 @@ class SemanticCache:
         old_query_tokens = content_tokens(cached_query)
         new_query_tokens = content_tokens(new_query)
         response_tokens = content_tokens(cached_response)
+        min_query_token_count = min(len(old_query_tokens), len(new_query_tokens))
+
+        # Very short queries do not provide enough lexical signal for these
+        # guardrails. Applying leak checks there can over-block and cause
+        # unnecessary Gemini calls.
+        if min_query_token_count < MIN_GUARDRAIL_QUERY_TOKENS:
+            return False
 
         removed_tokens = old_query_tokens - new_query_tokens
         added_tokens = new_query_tokens - old_query_tokens
@@ -148,14 +156,15 @@ class SemanticCache:
         # small content-word edits (for example, fox -> cat). High embedding
         # similarity can still hide meaning changes in this pattern.
         shared_tokens = old_query_tokens & new_query_tokens
-        smaller_query_size = min(len(old_query_tokens), len(new_query_tokens))
         overlap_ratio = (
-            len(shared_tokens) / smaller_query_size if smaller_query_size else 0.0
+            len(shared_tokens) / min_query_token_count
+            if min_query_token_count
+            else 0.0
         )
         total_edit_tokens = len(removed_tokens) + len(added_tokens)
 
         if (
-            smaller_query_size >= MIN_TEMPLATE_TOKEN_COUNT
+            min_query_token_count >= MIN_TEMPLATE_TOKEN_COUNT
             and overlap_ratio >= MIN_TEMPLATE_OVERLAP_RATIO
             and total_edit_tokens <= MAX_SMALL_EDIT_TOKEN_CHANGES
         ):

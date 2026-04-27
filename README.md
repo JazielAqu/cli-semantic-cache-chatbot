@@ -75,7 +75,9 @@ Available commands:
 3. Compare against cached query embeddings via cosine similarity.
 4. Find best matching cached entry.
 5. Apply threshold check (`best_score >= threshold`).
-6. Apply a response-leak guardrail: reject cache reuse when the new query changes key words and the cached response still contains removed old words (for example, old query had `fox`, new query has `cat`, and cached response still says `fox`).
+6. Apply guardrails:
+   - For very short queries (fewer than 3 content tokens), skip wording-leak guardrails. In testing, applying those rules to short text over-blocked valid cache hits and increased unnecessary Gemini calls.
+   - For longer queries, reject cache reuse when the new query changes key words and the cached response still contains removed old words (for example, old query had `fox`, new query has `cat`, and cached response still says `fox`).
 7. If both checks pass, return cached response (`cache hit`); otherwise call Gemini (`cache miss`), return generated response, and cache it.
 
 Cache entry fields:
@@ -120,12 +122,15 @@ This is intentionally approximate and is labeled as estimated in stats.
 - **In-memory cache**: simple and fast for this scope, but not persistent across program restarts.
 - **Approximate token accounting**: practical for quick analysis, but not guaranteed to exactly match provider-side usage accounting.
 - **Context-sensitive wording artifacts**: semantic similarity can still reuse responses with phrasing tied too closely to the original query wording.
+- **Guardrails favor longer queries**: wording-leak checks work better on longer text. On short text, they can over-trigger and cause unnecessary Gemini calls, so short-query behavior relies more on embedding similarity plus threshold.
+- **Cross-intent short-query separation is statistical**: in testing, cross-intent short queries were usually misses due to lower similarity, but this is not an explicit rule.
 
 ## Failure Modes Observed
 
 - Query pairs with similar meaning but different response tone/context can still produce awkward reuse if threshold is too low.
 - Typo-correction flows can trigger valid semantic hits while reusing wording that references the original typo. Example observed during testing: the response to `"How do I go from point A to point B on fett?"` included a typo-specific remark (`"Ah, 'fett'..."`), and when the user corrected the query to `"How do I go from point A to point B on feet?"`, the similarity score was `0.657`.
 - Mitigation implemented: a response-reuse guardrail now blocks this typo-leak pattern (and similar small word-substitution template cases like `fox -> cat`) even when similarity is high.
+- Mitigation implemented for very short queries: skip wording-leak guardrails under 3 content tokens. This restored valid short-query cache hits (for example greeting variants) and reduced unnecessary Gemini calls.
 
 ## Improvements With More Time
 
