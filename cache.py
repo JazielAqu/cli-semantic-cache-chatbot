@@ -1,7 +1,37 @@
 from sentence_transformers import SentenceTransformer
 import numpy as np
+import re
 
 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "what",
+    "when",
+    "where",
+    "why",
+}
+MIN_TEMPLATE_TOKEN_COUNT = 6
+MAX_SMALL_EDIT_TOKEN_CHANGES = 4
+MIN_TEMPLATE_OVERLAP_RATIO = 0.60
 
 
 def normalize(text: str) -> str:
@@ -14,6 +44,11 @@ def embed(text: str) -> np.ndarray:
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b))
+
+
+def content_tokens(text: str) -> set[str]:
+    words = re.findall(r"[a-z0-9']+", normalize(text))
+    return {word for word in words if word not in STOPWORDS}
 
 
 class SemanticCache:
@@ -29,18 +64,28 @@ class SemanticCache:
             return None, 0.0, 0
 
         query_embedding = embed(query)
-        best_score = float("-inf")
-        best_entry = None
+        scored_entries = []
 
         for entry in self.entries:
             score = cosine_similarity(query_embedding, entry["embedding"])
-            if score > best_score:
-                best_score = score
-                best_entry = entry
+            scored_entries.append((score, entry))
 
-        if best_entry and best_score >= self.threshold:
+        scored_entries.sort(key=lambda item: item[0], reverse=True)
+        best_score = scored_entries[0][0]
+
+        for score, entry in scored_entries:
+            if score < self.threshold:
+                break
+
+            if self._should_reject_response_reuse(
+                new_query=query,
+                cached_query=entry["query"],
+                cached_response=entry["response"],
+            ):
+                continue
+
             self.hits += 1
-            return best_entry["response"], best_score, best_entry["output_token_estimate"]
+            return entry["response"], score, entry["output_token_estimate"]
 
         self.misses += 1
         return None, best_score, 0
@@ -69,3 +114,45 @@ class SemanticCache:
             "cache_misses": self.misses,
             "hit_rate": f"{hit_rate:.1f}%",
         }
+
+    def _should_reject_response_reuse(
+        self,
+        new_query: str,
+        cached_query: str,
+        cached_response: str,
+    ) -> bool:
+        """Reject reuse when response still contains old query-specific words."""
+        old_query_tokens = content_tokens(cached_query)
+        new_query_tokens = content_tokens(new_query)
+        response_tokens = content_tokens(cached_response)
+
+        removed_tokens = old_query_tokens - new_query_tokens
+        added_tokens = new_query_tokens - old_query_tokens
+
+        if not removed_tokens or not added_tokens:
+            return False
+
+        # Guardrail 1: if cached response still contains words removed from
+        # the new query, reuse is likely stale or wording-specific.
+        if any(token in response_tokens for token in removed_tokens):
+            return True
+
+        # Guardrail 2: conservative fallback for near-identical sentence
+        # templates with small content-word edits (e.g., fox -> cat).
+        # Even with high embedding similarity, these edits can alter intent
+        # enough to make reuse quality poor.
+        shared_tokens = old_query_tokens & new_query_tokens
+        smaller_query_size = min(len(old_query_tokens), len(new_query_tokens))
+        overlap_ratio = (
+            len(shared_tokens) / smaller_query_size if smaller_query_size else 0.0
+        )
+        total_edit_tokens = len(removed_tokens) + len(added_tokens)
+
+        if (
+            smaller_query_size >= MIN_TEMPLATE_TOKEN_COUNT
+            and overlap_ratio >= MIN_TEMPLATE_OVERLAP_RATIO
+            and total_edit_tokens <= MAX_SMALL_EDIT_TOKEN_CHANGES
+        ):
+            return True
+
+        return False
