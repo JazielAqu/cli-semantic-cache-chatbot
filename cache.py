@@ -33,20 +33,6 @@ MIN_TEMPLATE_TOKEN_COUNT = 6
 MAX_SMALL_EDIT_TOKEN_CHANGES = 4
 MIN_TEMPLATE_OVERLAP_RATIO = 0.60
 MIN_GUARDRAIL_QUERY_TOKENS = 3
-SHORT_QUERY_MAX_TOKENS = 2
-SHORT_QUERY_INTENT_TOKENS = {
-    "greeting": {"hi", "hello", "hey", "yo", "howdy"},
-    "farewell": {"bye", "goodbye", "cya", "farewell"},
-    "gratitude": {"thanks", "thankyou", "thx"},
-    "agreement": {"yes", "yeah", "yep", "sure", "ok", "okay"},
-    "disagreement": {"no", "nope", "nah"},
-}
-SHORT_QUERY_INTENT_PHRASES = {
-    "what's up": "greeting",
-    "whats up": "greeting",
-    "see ya": "farewell",
-    "thank you": "gratitude",
-}
 
 
 def normalize(text: str) -> str:
@@ -149,12 +135,9 @@ class SemanticCache:
         response_tokens = content_tokens(cached_response)
         min_query_token_count = min(len(old_query_tokens), len(new_query_tokens))
 
-        # For very short queries, compare coarse intent buckets so "hi" can
-        # reuse "hello", but "hi" does not reuse "bye".
-        if self._should_reject_short_query_reuse(new_query, cached_query):
-            return True
-
-        # Do not apply wording guardrails to very short queries like greetings.
+        # Very short queries do not provide enough lexical signal for these
+        # guardrails. Applying leak checks there can over-block and cause
+        # unnecessary Gemini calls.
         if min_query_token_count < MIN_GUARDRAIL_QUERY_TOKENS:
             return False
 
@@ -188,35 +171,3 @@ class SemanticCache:
             return True
 
         return False
-
-    def _short_query_intent(self, query: str) -> str | None:
-        query_tokens = content_tokens(query)
-        if not query_tokens or len(query_tokens) > SHORT_QUERY_MAX_TOKENS:
-            return None
-
-        normalized_query = normalize(query)
-        if normalized_query in SHORT_QUERY_INTENT_PHRASES:
-            return SHORT_QUERY_INTENT_PHRASES[normalized_query]
-
-        for intent_name, intent_tokens in SHORT_QUERY_INTENT_TOKENS.items():
-            if any(token in intent_tokens for token in query_tokens):
-                return intent_name
-
-        return "other_short"
-
-    def _should_reject_short_query_reuse(
-        self,
-        new_query: str,
-        cached_query: str,
-    ) -> bool:
-        new_intent = self._short_query_intent(new_query)
-        cached_intent = self._short_query_intent(cached_query)
-
-        if new_intent is None or cached_intent is None:
-            return False
-
-        # Unknown short queries must match exactly to avoid bad reuse.
-        if new_intent == "other_short" or cached_intent == "other_short":
-            return normalize(new_query) != normalize(cached_query)
-
-        return new_intent != cached_intent
