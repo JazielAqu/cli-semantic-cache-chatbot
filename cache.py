@@ -47,12 +47,14 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def content_tokens(text: str) -> set[str]:
-    words = re.findall(r"[a-z0-9']+", normalize(text))
+    # Keep apostrophes inside words (e.g., "isn't"), but avoid treating
+    # surrounding quotes like "'fett'" as different tokens from "fett".
+    words = re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", normalize(text))
     return {word for word in words if word not in STOPWORDS}
 
 
 class SemanticCache:
-    def __init__(self, threshold: float = 0.66):
+    def __init__(self, threshold: float = 0.45):
         self.threshold = threshold
         self.entries = []  # list of {embedding, query, response, output_token_estimate}
         self.hits = 0
@@ -100,11 +102,16 @@ class SemanticCache:
             }
         )
 
+    def rollback_miss(self) -> None:
+        """Undo the most recent miss when generation fails after lookup."""
+        if self.misses > 0:
+            self.misses -= 1
+
     def stats(self):
         total = self.hits + self.misses
 
         if total > 0:
-            hit_rate = ((self.hits / total) * 100) 
+            hit_rate = (self.hits / total) * 100
         else:
             hit_rate = 0.0
 

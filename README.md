@@ -93,9 +93,10 @@ I tuned the threshold using `threshold_eval.py`:
 - **Expanded offline tuning:** expanded to a larger labeled set with harder negatives (negation traps, lexical overlap traps, typo correction, casual phrasing) and swept thresholds using confusion-matrix metrics (`TP`, `FP`, `TN`, `FN`) plus `precision`, `recall`, `f1`, and `accuracy`.
 - **Expanded-set result:** `0.35` gave the best `f1` and no false negatives on that dataset (better for limiting unnecessary Gemini calls).
 - **Precision-focused alternative:** `0.45` is also defensible if prioritizing fewer false positives and higher response quality over recall.
-- **Production choice:** after local live-chat testing, I set `0.66` in code to prioritize UX quality and avoid subtle low-quality reuse. This still catches obvious close variants (for example `Hi`/`Hello`/`Hey`) while being more conservative on broader paraphrases (for example `What's up`).
+- **Production choice:** I set `0.45` in code as the final threshold because it is directly backed by the threshold-eval sweep and keeps a stronger precision/recall balance than the lower `0.35` F1-optimal option for this use case.
+- **Guardrail pairing:** in addition to the threshold, I added a response-reuse guardrail that rejects high-similarity hits when key query words changed and reuse would likely carry stale wording.
 
-Current runtime threshold in `cache.py` and `main.py` is `0.66`.
+Current runtime threshold in `cache.py` and `main.py` is `0.45`.
 
 ## Metrics and Token Estimation
 
@@ -122,7 +123,8 @@ This is intentionally approximate and is labeled as estimated in stats.
 ## Failure Modes Observed
 
 - Query pairs with similar meaning but different response tone/context can still produce awkward reuse if threshold is too low.
-- Typo-correction flows can trigger valid semantic hits while reusing wording that references the original typo. Example observed during testing: the response to `"How do I go from point A to point B on fett?"` included a typo-specific remark (`"Ah, 'fett'..."`), and when the user corrected the query to `"How do I go from point A to point B on feet?"`, a cache hit reused that same typo remark at a similarity score of `0.657`.
+- Typo-correction flows can trigger valid semantic hits while reusing wording that references the original typo. Example observed during testing: the response to `"How do I go from point A to point B on fett?"` included a typo-specific remark (`"Ah, 'fett'..."`), and when the user corrected the query to `"How do I go from point A to point B on feet?"`, the similarity score was `0.657`.
+- Mitigation implemented: a response-reuse guardrail now blocks this typo-leak pattern (and similar small word-substitution template cases like `fox -> cat`) even when similarity is high.
 
 ## Improvements With More Time
 

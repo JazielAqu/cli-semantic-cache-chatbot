@@ -7,13 +7,18 @@ from gemini import (
 )
 
 
-cache = SemanticCache(threshold=0.66)
+cache = SemanticCache(threshold=0.45)
 conversation_history: list[dict[str, str]] = []
 token_metrics = {
     "estimated_input_tokens_sent": 0,
     "estimated_output_tokens_generated": 0,
     "estimated_input_tokens_saved": 0,
     "estimated_output_tokens_saved": 0,
+}
+runtime_metrics = {
+    "generated_responses": 0,
+    "cache_responses": 0,
+    "llm_errors": 0,
 }
 
 
@@ -46,6 +51,8 @@ def chat(user_input: str) -> tuple[str, bool, float]:
     except (GeminiRateLimitError, GeminiRequestError):
         # Remove unresolved user turn when generation fails.
         conversation_history.pop()
+        # Lookup was a miss, but no response was produced, so do not count it.
+        cache.rollback_miss()
         raise
 
     token_metrics["estimated_input_tokens_sent"] += input_tokens_estimate
@@ -58,6 +65,9 @@ def chat(user_input: str) -> tuple[str, bool, float]:
 
 def print_stats() -> None:
     stats = cache.stats()
+    successful_answered_turns = (
+        runtime_metrics["generated_responses"] + runtime_metrics["cache_responses"]
+    )
     total_estimated_saved = (
         token_metrics["estimated_input_tokens_saved"]
         + token_metrics["estimated_output_tokens_saved"]
@@ -72,6 +82,8 @@ def print_stats() -> None:
     print(f"Cache hits: {stats['cache_hits']}")
     print(f"Cache misses: {stats['cache_misses']}")
     print(f"Cache hit rate: {stats['hit_rate']}")
+    print(f"Successful answered turns: {successful_answered_turns}")
+    print(f"LLM error turns: {runtime_metrics['llm_errors']}")
     print(f"Estimated input tokens sent: {token_metrics['estimated_input_tokens_sent']}")
     print(
         f"Estimated output tokens generated: "
@@ -104,25 +116,29 @@ def main() -> None:
             continue
 
         lower = user_input.lower()
-        if lower in {"/exit", "exit", "quit"}:
+        if lower == "/exit":
             print_stats()
             break
-        if lower in {"/stats", "stats"}:
+        if lower == "/stats":
             print_stats()
             continue
 
         try:
             response, from_cache, score = chat(user_input)
         except GeminiRateLimitError as exc:
+            runtime_metrics["llm_errors"] += 1
             print(f"Bot [error]: {exc}\n")
             continue
         except GeminiRequestError as exc:
+            runtime_metrics["llm_errors"] += 1
             print(f"Bot [error]: {exc}\n")
             continue
     
         if from_cache:
+            runtime_metrics["cache_responses"] += 1
             print(f"Bot [cache score={score:.3f}]: {response}\n")
         else:
+            runtime_metrics["generated_responses"] += 1
             print(f"Bot [generated best_score={score:.3f}]: {response}\n")
 
 if __name__ == "__main__":
