@@ -70,7 +70,6 @@ LABELED_PAIRS = [
 ]
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-QUALITY_MIN_PRECISION = 0.90
 
 
 def score_pairs(labeled_pairs):
@@ -152,26 +151,6 @@ def choose_best_by_f1(candidate_metrics):
     )
 
 
-def choose_precision_first(candidate_metrics):
-    precision_safe = [
-        metrics
-        for metrics in candidate_metrics
-        if metrics["precision_score"] >= QUALITY_MIN_PRECISION
-    ]
-    if not precision_safe:
-        return None
-
-    return max(
-        precision_safe,
-        key=lambda metrics: (
-            metrics["recall_rate"],
-            metrics["f1_score"],
-            metrics["precision_score"],
-            metrics["threshold"],
-        ),
-    )
-
-
 def show_misclassifications(scored_pairs, threshold, limit=8):
     mistakes = []
     for left_text, right_text, is_paraphrase, similarity_score in scored_pairs:
@@ -225,8 +204,6 @@ def main():
         )
 
     best_by_f1 = choose_best_by_f1(candidate_metrics)
-    precision_first = choose_precision_first(candidate_metrics)
-
     print("\nBest threshold by f1_score:")
     print(
         f"threshold={best_by_f1['threshold']:.2f}, "
@@ -237,25 +214,6 @@ def main():
         f"f1={best_by_f1['f1_score']:.3f}, "
         f"accuracy={best_by_f1['accuracy']:.3f}"
     )
-
-    if precision_first is not None:
-        print(
-            f"\nPrecision-first recommendation (precision >= {QUALITY_MIN_PRECISION:.2f}):"
-        )
-        print(
-            f"threshold={precision_first['threshold']:.2f}, "
-            f"TP={precision_first['true_positives']}, FP={precision_first['false_positives']}, "
-            f"TN={precision_first['true_negatives']}, FN={precision_first['false_negatives']}, "
-            f"precision={precision_first['precision_score']:.3f}, "
-            f"recall={precision_first['recall_rate']:.3f}, "
-            f"f1={precision_first['f1_score']:.3f}, "
-            f"accuracy={precision_first['accuracy']:.3f}"
-        )
-    else:
-        print(
-            f"\nNo threshold reached precision >= {QUALITY_MIN_PRECISION:.2f}. "
-            "Use best-by-F1 or lower the precision guardrail."
-        )
 
     show_misclassifications(scored_pairs, best_by_f1["threshold"], limit=8)
 
