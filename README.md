@@ -65,8 +65,8 @@ python main.py
 
 Available commands:
 
-- `/stats` (or `stats`): print current cache + token metrics
-- `/exit` (or `exit`, `quit`): exit and print final stats
+- `/stats`: print current cache + token metrics
+- `/exit`: exit and print final stats
 
 ## How the Semantic Cache Works
 
@@ -93,7 +93,7 @@ I tuned the threshold using `threshold_eval.py`:
 - **Expanded offline tuning:** expanded to a larger labeled set with harder negatives (negation traps, lexical overlap traps, typo correction, casual phrasing) and swept thresholds using confusion-matrix metrics (`TP`, `FP`, `TN`, `FN`) plus `precision`, `recall`, `f1`, and `accuracy`.
 - **Expanded-set result:** `0.35` gave the best `f1` and no false negatives on that dataset (better for limiting unnecessary Gemini calls).
 - **Precision-focused alternative:** `0.45` is also defensible if prioritizing fewer false positives and higher response quality over recall.
-- **Production choice:** I set `0.45` in code as the final threshold because it is directly backed by the threshold-eval sweep and keeps a stronger precision/recall balance than the lower `0.35` F1-optimal option for this use case.
+- **Production choice:** I set `0.45` in code as the final threshold because it is directly backed by the threshold-eval sweep and is more conservative than the F1-optimal `0.35`, reducing false-positive cache hits at the cost of lower recall.
 - **Guardrail pairing:** in addition to the threshold, I added a response-reuse guardrail that rejects high-similarity hits when key query words changed and reuse would likely carry stale wording.
 
 Current runtime threshold in `cache.py` and `main.py` is `0.45`.
@@ -115,10 +115,11 @@ This is intentionally approximate and is labeled as estimated in stats.
 
 ## Trade-offs
 
-- **Precision vs recall**: lower thresholds increase hits but risk low-quality false positives; higher thresholds reduce risky reuse but increase LLM calls.
+- **Precision vs recall (with product impact)**: in a conversational UX, a false-positive cache hit (wrong reused answer) is usually worse than a cache miss (extra LLM call). That asymmetry is why I run `0.45` in production instead of the F1-optimal `0.35`.
+- **Single-turn cache matching**: cache lookup compares queries in isolation, not full conversation state. The same wording can require different answers in different moments of a conversation, but this cache treats them as equivalent.
 - **In-memory cache**: simple and fast for this scope, but not persistent across program restarts.
-- **Approximate token accounting**: practical for quick analysis, not exact billing parity.
-- **Context-sensitive responses**: semantic similarity can still reuse responses with wording artifacts tied to earlier phrasing.
+- **Approximate token accounting**: practical for quick analysis, but not guaranteed to exactly match provider-side usage accounting.
+- **Context-sensitive wording artifacts**: semantic similarity can still reuse responses with phrasing tied too closely to the original query wording.
 
 ## Failure Modes Observed
 
@@ -133,13 +134,14 @@ This is intentionally approximate and is labeled as estimated in stats.
 - Add CLI controls (for example `/new` and `/resume <session_id>`) so users can explicitly choose whether to start fresh or continue.
 - Expand the response-reuse guardrail beyond typo/copy-edit cases (for example broader contradiction checks and stronger query-vs-response consistency checks).
 - Add larger labeled threshold datasets tailored to the target use case (for example: returns, refunds, order tracking, shipping, billing, and account access support queries).
+- Benchmark multiple embedding models (including customer-support or financial-domain options) on the same labeled dataset, then recalibrate thresholds per model. Similarity thresholds are model-dependent, and a better model may reduce typo and word-substitution false positives.
 - Add automated tests for cache hit/miss behavior and token accounting.
 - Add optional model/backend abstraction for embedding and storage experiments.
 
 ## AI Usage Note
 
-I used AI tools for brainstorming architecture options, reviewing trade-offs, and iterating on implementation details.  
-I made final decisions on design, threshold strategy, error handling behavior, and metric definitions, and validated behavior through local testing.
+I used AI tools as an engineering assistant for brainstorming, code review-style feedback, and writing clarity.  
+I owned implementation and final decisions: architecture, threshold strategy, guardrail design, error-handling behavior, metric definitions, and local validation/testing.
 
 ## References
 

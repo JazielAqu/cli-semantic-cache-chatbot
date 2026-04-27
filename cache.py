@@ -47,8 +47,8 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def content_tokens(text: str) -> set[str]:
-    # Keep apostrophes inside words (e.g., "isn't"), but avoid treating
-    # surrounding quotes like "'fett'" as different tokens from "fett".
+    # Keep apostrophes inside words like "isn't".
+    # Also treat "'fett'" and "fett" as the same token.
     words = re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", normalize(text))
     return {word for word in words if word not in STOPWORDS}
 
@@ -128,7 +128,7 @@ class SemanticCache:
         cached_query: str,
         cached_response: str,
     ) -> bool:
-        """Reject reuse when response still contains old query-specific words."""
+        """Block reuse when wording from the old query leaks into the response."""
         old_query_tokens = content_tokens(cached_query)
         new_query_tokens = content_tokens(new_query)
         response_tokens = content_tokens(cached_response)
@@ -139,15 +139,14 @@ class SemanticCache:
         if not removed_tokens or not added_tokens:
             return False
 
-        # Guardrail 1: if cached response still contains words removed from
-        # the new query, reuse is likely stale or wording-specific.
+        # Guardrail 1: if the cached response still contains words that were
+        # removed in the new query, reuse is likely stale.
         if any(token in response_tokens for token in removed_tokens):
             return True
 
-        # Guardrail 2: conservative fallback for near-identical sentence
-        # templates with small content-word edits (e.g., fox -> cat).
-        # Even with high embedding similarity, these edits can alter intent
-        # enough to make reuse quality poor.
+        # Guardrail 2: fallback for near-identical sentence templates with
+        # small content-word edits (for example, fox -> cat). High embedding
+        # similarity can still hide meaning changes in this pattern.
         shared_tokens = old_query_tokens & new_query_tokens
         smaller_query_size = min(len(old_query_tokens), len(new_query_tokens))
         overlap_ratio = (
