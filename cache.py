@@ -32,7 +32,7 @@ STOPWORDS = {
 MIN_TEMPLATE_TOKEN_COUNT = 6
 MAX_SMALL_EDIT_TOKEN_CHANGES = 4
 MIN_TEMPLATE_OVERLAP_RATIO = 0.60
-MIN_GUARDRAIL_QUERY_TOKENS = 3
+SHORT_QUERY_TOKEN_LIMIT = 6
 
 
 def normalize(text: str) -> str:
@@ -129,17 +129,11 @@ class SemanticCache:
         cached_query: str,
         cached_response: str,
     ) -> bool:
-        """Block reuse when wording from the old query leaks into the response."""
+        """Block reuse for risky short swaps and long template-swap cases."""
         old_query_tokens = content_tokens(cached_query)
         new_query_tokens = content_tokens(new_query)
         response_tokens = content_tokens(cached_response)
         min_query_token_count = min(len(old_query_tokens), len(new_query_tokens))
-
-        # Very short queries do not provide enough lexical signal for these
-        # guardrails. Applying leak checks there can over-block and cause
-        # unnecessary Gemini calls.
-        if min_query_token_count < MIN_GUARDRAIL_QUERY_TOKENS:
-            return False
 
         removed_tokens = old_query_tokens - new_query_tokens
         added_tokens = new_query_tokens - old_query_tokens
@@ -147,14 +141,19 @@ class SemanticCache:
         if not removed_tokens or not added_tokens:
             return False
 
-        # Guardrail 1: if the cached response still contains words that were
-        # removed in the new query, reuse is likely stale.
-        if any(token in response_tokens for token in removed_tokens):
-            return True
+        # Short-query rule: only block direct one-word subject swaps when the
+        # removed word still appears in the cached response.
+        if min_query_token_count < SHORT_QUERY_TOKEN_LIMIT:
+            if (
+                len(removed_tokens) == 1
+                and len(added_tokens) == 1
+                and any(token in response_tokens for token in removed_tokens)
+            ):
+                return True
+            return False
 
-        # Guardrail 2: fallback for near-identical sentence templates with
-        # small content-word edits (for example, fox -> cat). High embedding
-        # similarity can still hide meaning changes in this pattern.
+        # Long-query rule: block near-identical sentence templates with small
+        # content-word edits (for example, fox -> cat).
         shared_tokens = old_query_tokens & new_query_tokens
         overlap_ratio = (
             len(shared_tokens) / min_query_token_count

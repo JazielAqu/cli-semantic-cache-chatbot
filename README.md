@@ -76,8 +76,8 @@ Available commands:
 4. Find best matching cached entry.
 5. Apply threshold check (`best_score >= threshold`).
 6. Apply guardrails:
-   - For very short queries (fewer than 3 content tokens), skip wording-leak guardrails. In testing, applying those rules to short text over-blocked valid cache hits and increased unnecessary Gemini calls.
-   - For longer queries, reject cache reuse when the new query changes key words and the cached response still contains removed old words (for example, old query had `fox`, new query has `cat`, and cached response still says `fox`).
+   - For short queries (under 6 content tokens), apply a narrow stale-word check: if exactly one content token was swapped and the removed token still appears in the cached response, block reuse.
+   - For longer queries (6 or more content tokens), reject reuse for near-identical templates with small content-word swaps (for example `fox -> cat` or `fett -> feet`) because high embedding similarity can hide meaning shifts.
 7. If both checks pass, return cached response (`cache hit`); otherwise call Gemini (`cache miss`), return generated response, and cache it.
 
 Cache entry fields:
@@ -96,7 +96,7 @@ I tuned the threshold using `threshold_eval.py`:
 - **Expanded-set result:** `0.35` gave the best `f1` and no false negatives on that dataset (better for limiting unnecessary Gemini calls).
 - **Precision-focused alternative:** `0.45` is also defensible if prioritizing fewer false positives and higher response quality over recall.
 - **Production choice:** I set `0.45` in code as the final threshold because it is directly backed by the threshold-eval sweep and is more conservative than the F1-optimal `0.35`, reducing false-positive cache hits at the cost of lower recall.
-- **Guardrail pairing:** in addition to the threshold, I added a response-reuse guardrail that rejects high-similarity hits when key query words changed and reuse would likely carry stale wording.
+- **Guardrail pairing:** in addition to the threshold, I added a conservative template-swap guardrail that rejects high-similarity hits when longer queries are nearly identical but differ by only a small word substitution.
 
 Current runtime threshold in `cache.py` and `main.py` is `0.45`.
 
@@ -122,22 +122,23 @@ This is intentionally approximate and is labeled as estimated in stats.
 - **In-memory cache**: simple and fast for this scope, but not persistent across program restarts.
 - **Approximate token accounting**: practical for quick analysis, but not guaranteed to exactly match provider-side usage accounting.
 - **Context-sensitive wording artifacts**: semantic similarity can still reuse responses with phrasing tied too closely to the original query wording.
-- **Guardrails favor longer queries**: wording-leak checks work better on longer text. On short text, they can over-trigger and cause unnecessary Gemini calls, so short-query behavior relies more on embedding similarity plus threshold.
-- **Cross-intent short-query separation is statistical**: in testing, cross-intent short queries were usually misses due to lower similarity, but this is not an explicit rule.
+- **Guardrails favor longer queries**: template-swap checks are strongest on longer text. For short text, I use a narrower one-word swap stale-word check to reduce over-blocking.
+- **Cross-intent short-query separation is still statistical**: short-query guardrails do not fully classify intent, so thresholded embedding similarity remains the main separator.
 
 ## Failure Modes Observed
 
 - Query pairs with similar meaning but different response tone/context can still produce awkward reuse if threshold is too low.
+- Fragment-to-long-query false positives can still happen. Example observed during testing: a short fragment like `"My dog"` can score above threshold against `"My dog is on top of my door"` and reuse a response that is too generic for the longer query.
 - Typo-correction flows can trigger valid semantic hits while reusing wording that references the original typo. Example observed during testing: the response to `"How do I go from point A to point B on fett?"` included a typo-specific remark (`"Ah, 'fett'..."`), and when the user corrected the query to `"How do I go from point A to point B on feet?"`, the similarity score was `0.657`.
-- Mitigation implemented: a response-reuse guardrail now blocks this typo-leak pattern (and similar small word-substitution template cases like `fox -> cat`) even when similarity is high.
-- Mitigation implemented for very short queries: skip wording-leak guardrails under 3 content tokens. This restored valid short-query cache hits (for example greeting variants) and reduced unnecessary Gemini calls.
+- Mitigation implemented: a template-swap guardrail now blocks typo and small word-substitution cases (for example `fett -> feet` and `fox -> cat`) even when similarity is high.
+- Mitigation implemented for short queries: use a narrow one-word stale-word check instead of broad template blocking. This keeps useful short-query hits while reducing obvious stale reuses.
 
 ## Improvements With More Time
 
 - Add an optional SQLite persistence mode for crash recovery/session resume while keeping in-memory mode as the default.
 - Scope persisted cache entries by `session_id` (and optionally `user_id`) so cache reuse does not bleed across unrelated conversations.
 - Add CLI controls (for example `/new` and `/resume <session_id>`) so users can explicitly choose whether to start fresh or continue.
-- Expand the response-reuse guardrail beyond typo/copy-edit cases (for example broader contradiction checks and stronger query-vs-response consistency checks).
+- Expand guardrails beyond typo/copy-edit cases (for example broader contradiction checks and stronger query-vs-response consistency checks).
 - Add larger labeled threshold datasets tailored to the target use case (for example: returns, refunds, order tracking, shipping, billing, and account access support queries).
 - Benchmark multiple embedding models (including customer-support or financial-domain options) on the same labeled dataset, then recalibrate thresholds per model. Similarity thresholds are model-dependent, and a better model may reduce typo and word-substitution false positives.
 - Add automated tests for cache hit/miss behavior and token accounting.
